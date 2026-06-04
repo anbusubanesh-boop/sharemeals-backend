@@ -705,5 +705,41 @@ app.get('/api/tasks/:userId', async (req, res) => {
   }
 });
 
+// Get general system stats summary
+app.get('/api/stats/summary', async (req, res) => {
+  try {
+    const mealsSaved = await Donation.countDocuments({ status: 'completed' });
+    const activeDonors = await User.countDocuments({ role: 'donor' });
+    const activeNGOs = await User.countDocuments({ role: 'ngo' });
+
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const mealsSharedToday = await Donation.countDocuments({
+      createdAt: { $gte: todayStart }
+    });
+
+    res.json({
+      mealsSaved,
+      activeDonors,
+      activeNGOs,
+      mealsSharedToday
+    });
+  } catch (err) {
+    console.error('Stats query error:', err);
+    res.status(500).json({ message: 'Failed to fetch summary stats' });
+  }
+});
+
+// Get all registered NGOs
+app.get('/api/ngos', async (req, res) => {
+  try {
+    const ngos = await User.find({ role: 'ngo' }).select('firstName lastName email location phoneNumber');
+    res.json(ngos);
+  } catch (err) {
+    console.error('NGO query error:', err);
+    res.status(500).json({ message: 'Failed to fetch NGOs' });
+  }
+});
+
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
