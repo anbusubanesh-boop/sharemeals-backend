@@ -162,7 +162,7 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 // Connect to MongoDB
-mongoose.connect(process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/food_share')
+mongoose.connect(process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/sharemeal')
   .then(() => console.log('✅ Connected to MongoDB'))
   .catch(err => console.error('❌ MongoDB Connection Error:', err));
 
@@ -331,11 +331,31 @@ app.post('/api/donations', upload.single('image'), async (req, res) => {
 // Get all available Donations
 app.get('/api/donations', async (req, res) => {
   try {
-    const donations = await Donation.find().populate('courier', 'firstName lastName').sort({ createdAt: -1 });
+    const donations = await Donation.find()
+      .populate('courier', 'firstName lastName')
+      .populate('donor', 'firstName lastName phoneNumber')
+      .sort({ createdAt: -1 });
     res.json(donations);
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Failed to fetch donations' });
+  }
+});
+
+// Get a single Donation by ID
+app.get('/api/donations/:id', async (req, res) => {
+  try {
+    const donation = await Donation.findById(req.params.id)
+      .populate('donor', 'firstName lastName email phoneNumber')
+      .populate('recipient', 'firstName lastName email phoneNumber')
+      .populate('courier', 'firstName lastName email phoneNumber');
+    if (!donation) {
+      return res.status(404).json({ message: 'Donation not found' });
+    }
+    res.json(donation);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to fetch donation details' });
   }
 });
 
@@ -579,6 +599,29 @@ app.post('/api/donations/:id/delivered', async (req, res) => {
       }
     }
 
+    if (donation.recipient) {
+      io.to(donation.recipient.toString()).emit('notification', {
+        message: 'Your requested food has been delivered to the destination! Please mark it as received.',
+        status: 'delivered'
+      });
+      sendPushNotification({
+        title: '🎉 Food Delivered!',
+        body: `Your requested food "${donation.foodType || 'food'}" has been delivered. Please mark it as received!`,
+        url: '/dashboard'
+      }, donation.recipient);
+      try {
+        const recipientUser = await User.findById(donation.recipient);
+        if (recipientUser && recipientUser.phoneNumber) {
+          sendSMS(
+            recipientUser.phoneNumber,
+            `ShareMeal: Your requested food "${donation.foodType || 'food'}" has been delivered. Please mark it as received!`
+          );
+        }
+      } catch (smsErr) {
+        console.error('Failed to send SMS to recipient:', smsErr);
+      }
+    }
+
     res.json({ message: 'Delivered successfully', donation });
   } catch (err) {
     res.status(500).json({ message: 'Failed to update' });
@@ -618,13 +661,16 @@ app.post('/api/donations/:id/received', async (req, res) => {
   }
 });
 
-// Get My Active Requests (For Recipients)
+// Get My Active & Completed Requests (For Recipients)
 app.get('/api/requests/:userId', async (req, res) => {
   try {
     const requests = await Donation.find({
       recipient: req.params.userId,
-      status: { $in: ['needs_volunteer', 'assigned', 'picked_up', 'delivered'] }
-    }).sort({ createdAt: -1 });
+      status: { $in: ['needs_volunteer', 'assigned', 'picked_up', 'delivered', 'completed'] }
+    })
+    .populate('courier', 'firstName lastName')
+    .populate('donor', 'firstName lastName phoneNumber')
+    .sort({ createdAt: -1 });
     res.json(requests);
   } catch (err) {
     res.status(500).json({ message: 'Failed to fetch requests' });
@@ -649,7 +695,10 @@ app.get('/api/tasks/:userId', async (req, res) => {
     const tasks = await Donation.find({
       courier: req.params.userId,
       status: { $in: ['assigned', 'picked_up'] }
-    }).sort({ createdAt: -1 });
+    })
+    .populate('courier', 'firstName lastName')
+    .populate('donor', 'firstName lastName phoneNumber')
+    .sort({ createdAt: -1 });
     res.json(tasks);
   } catch (err) {
     res.status(500).json({ message: 'Failed to fetch tasks' });
